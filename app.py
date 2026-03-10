@@ -4,6 +4,7 @@ from src.solver.optimizer import optimize_schedule
 from src.ui.setup_wizard import render_setup_wizard
 from src.ui.schedule_form import render_schedule_form
 from src.ui.preview import render_preview
+from src.ui.policy_help import render_policy_help
 import tempfile
 import os
 
@@ -21,7 +22,7 @@ with st.sidebar:
     st.header("Navigation")
     page = st.radio(
         "Go to",
-        options=["1. Setup", "2. Upload Roster", "3. Generate Schedule"],
+        options=["1. Setup", "2. Upload Roster", "3. Generate Schedule", "4. Policy Help"],
         index=0,
     )
     st.divider()
@@ -101,3 +102,6 @@ elif page == "3. Generate Schedule":
                 st.session_state["last_config"],
                 st.session_state["last_assignments"],
             )
+
+elif page == "4. Policy Help":
+    render_policy_help()

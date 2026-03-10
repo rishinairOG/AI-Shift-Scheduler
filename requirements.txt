@@ -3,3 +3,10 @@ ortools>=9.8.3296
 openpyxl>=3.1.2
 pandas>=2.0.0
 pytest>=8.0.0
+
+# LangChain (RAG, structured extraction, agents)
+langchain
+langchain-openai
+langchain-community
+faiss-cpu
+fastembed

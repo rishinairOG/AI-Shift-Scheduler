@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
@@ -64,11 +65,93 @@ def render_schedule_form(staff_list, sections) -> ScheduleConfig | None:
             section_min_per_day[sec_name] = {"total": int(min_total)}
             section_max_off_per_day[sec_name] = int(max_off)
 
+    # --- AI-powered free-text extraction (Phase 2) ---
+    ai_overrides: dict = {}
+    ai_off_requests: dict = {}
+
+    if os.environ.get("OPENROUTER_API_KEY"):
+        with st.expander("Paste free-text overrides & OFF requests (AI-powered)", expanded=False):
+            st.caption(
+                'Example: "PH on 21st for everyone. Sarah OFF 14th and 15th. Tom sick 10th. '
+                'Maria vacation 18\u201320."'
+            )
+            free_text = st.text_area(
+                "Paste manager instructions here",
+                height=100,
+                key="free_text_overrides",
+            )
+            if st.button("Extract with AI", key="btn_extract"):
+                if free_text.strip():
+                    with st.spinner("Extracting overrides from text..."):
+                        try:
+                            from src.rag.extract_overrides import (
+                                extract_overrides_from_text,
+                                validate_extracted,
+                            )
+                            extracted = extract_overrides_from_text(
+                                free_text, staff_list, sections, start_date, end_date,
+                            )
+                            warnings, resolved_ov, resolved_off = validate_extracted(
+                                extracted, staff_list, sections, start_date, end_date,
+                            )
+                            st.session_state["ai_extract_warnings"] = warnings
+                            st.session_state["ai_extract_overrides"] = resolved_ov
+                            st.session_state["ai_extract_off_requests"] = resolved_off
+                        except Exception as e:
+                            st.error(f"Extraction failed: {e}")
+                else:
+                    st.warning("Enter some text first.")
+
+            if st.session_state.get("ai_extract_overrides") or st.session_state.get("ai_extract_off_requests"):
+                resolved_ov = st.session_state.get("ai_extract_overrides", {})
+                resolved_off = st.session_state.get("ai_extract_off_requests", {})
+                extract_warnings = st.session_state.get("ai_extract_warnings", [])
+
+                staff_by_id = {s.id: s.name for s in staff_list}
+
+                if extract_warnings:
+                    for w in extract_warnings:
+                        st.warning(w)
+
+                if resolved_ov:
+                    st.write(f"**{len(resolved_ov)} manual override(s) found:**")
+                    for (sid, dstr), code in resolved_ov.items():
+                        st.text(f"  {staff_by_id.get(sid, sid)} \u2014 {dstr} \u2014 {code}")
+
+                if resolved_off:
+                    total_off = sum(len(v) for v in resolved_off.values())
+                    st.write(f"**{total_off} OFF request(s) found:**")
+                    for sid, dates in resolved_off.items():
+                        st.text(f"  {staff_by_id.get(sid, sid)} \u2014 {', '.join(dates)}")
+
+                if st.button("Apply to form", type="primary", key="btn_apply_extract"):
+                    ai_overrides = resolved_ov
+                    ai_off_requests = resolved_off
+                    st.session_state["ai_extract_overrides"] = {}
+                    st.session_state["ai_extract_off_requests"] = {}
+                    st.session_state["ai_extract_warnings"] = []
+                    st.success("Applied! Review the tables below, then generate.")
+
     # Manual overrides
     st.subheader("4. Manual Overrides (PH, Sick Leave, Vacation, etc.)")
     st.caption("Enter exceptions \u2014 these override AI assignments.")
+
+    pre_override_rows = []
+    staff_by_id = {s.id: s.name for s in staff_list}
+    for (sid, dstr), code in ai_overrides.items():
+        pre_override_rows.append({
+            "Staff Name": staff_by_id.get(sid, sid),
+            "Date (YYYY-MM-DD)": dstr,
+            "Status Code": code,
+        })
+
+    override_df = pd.DataFrame(
+        pre_override_rows if pre_override_rows
+        else [],
+        columns=["Staff Name", "Date (YYYY-MM-DD)", "Status Code"],
+    )
     override_data = st.data_editor(
-        pd.DataFrame(columns=["Staff Name", "Date (YYYY-MM-DD)", "Status Code"]),
+        override_df,
         num_rows="dynamic",
         use_container_width=True,
         key="override_editor"
@@ -88,8 +171,22 @@ def render_schedule_form(staff_list, sections) -> ScheduleConfig | None:
     # OFF requests
     st.subheader("5. Staff OFF Requests")
     st.caption("Staff who have requested specific days off this week.")
+
+    pre_off_rows = []
+    for sid, dates in ai_off_requests.items():
+        for dstr in dates:
+            pre_off_rows.append({
+                "Staff Name": staff_by_id.get(sid, sid),
+                "Requested OFF Date (YYYY-MM-DD)": dstr,
+            })
+
+    off_df = pd.DataFrame(
+        pre_off_rows if pre_off_rows
+        else [],
+        columns=["Staff Name", "Requested OFF Date (YYYY-MM-DD)"],
+    )
     off_req_data = st.data_editor(
-        pd.DataFrame(columns=["Staff Name", "Requested OFF Date (YYYY-MM-DD)"]),
+        off_df,
         num_rows="dynamic",
         use_container_width=True,
         key="off_req_editor"
