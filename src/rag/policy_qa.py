@@ -10,9 +10,10 @@ import pathlib
 from langchain_openai import ChatOpenAI
 from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.chains import RetrievalQA
-from langchain.prompts import PromptTemplate
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
 
 RULES_PATH = pathlib.Path(__file__).resolve().parents[2] / "docs" / "scheduling-rules.md"
 
@@ -63,19 +64,21 @@ def _build_vectorstore() -> FAISS:
     return _vectorstore_cache
 
 
+def _format_docs(docs) -> str:
+    return "\n\n".join(doc.page_content for doc in docs)
+
+
 def answer_policy_question(question: str) -> str:
     """Retrieve relevant rule chunks and generate an answer via the LLM."""
     vectorstore = _build_vectorstore()
     retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
     llm = _get_llm()
 
-    qa_chain = RetrievalQA.from_chain_type(
-        llm=llm,
-        retriever=retriever,
-        chain_type="stuff",
-        chain_type_kwargs={"prompt": _QA_PROMPT},
-        return_source_documents=True,
+    chain = (
+        {"context": retriever | _format_docs, "question": RunnablePassthrough()}
+        | _QA_PROMPT
+        | llm
+        | StrOutputParser()
     )
 
-    result = qa_chain.invoke({"query": question})
-    return result["result"]
+    return chain.invoke(question)
