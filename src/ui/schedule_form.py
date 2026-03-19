@@ -82,12 +82,13 @@ def render_schedule_form(staff_list, sections) -> ScheduleConfig | None:
             )
             if st.button("Extract with AI", key="btn_extract"):
                 if free_text.strip():
-                    with st.spinner("Extracting overrides from text..."):
+                    with st.spinner("Extracting overrides from text… this may take a few seconds."):
                         try:
                             from src.rag.extract_overrides import (
                                 extract_overrides_from_text,
                                 validate_extracted,
                             )
+                            from src.rag.llm_client import friendly_error_message
                             extracted = extract_overrides_from_text(
                                 free_text, staff_list, sections, start_date, end_date,
                             )
@@ -98,7 +99,7 @@ def render_schedule_form(staff_list, sections) -> ScheduleConfig | None:
                             st.session_state["ai_extract_overrides"] = resolved_ov
                             st.session_state["ai_extract_off_requests"] = resolved_off
                         except Exception as e:
-                            st.error(f"Extraction failed: {e}")
+                            st.error(friendly_error_message(e))
                 else:
                     st.warning("Enter some text first.")
 
@@ -113,20 +114,60 @@ def render_schedule_form(staff_list, sections) -> ScheduleConfig | None:
                     for w in extract_warnings:
                         st.warning(w)
 
-                if resolved_ov:
-                    st.write(f"**{len(resolved_ov)} manual override(s) found:**")
-                    for (sid, dstr), code in resolved_ov.items():
-                        st.text(f"  {staff_by_id.get(sid, sid)} \u2014 {dstr} \u2014 {code}")
+                st.write("**Review and edit** the extracted items before applying:")
 
-                if resolved_off:
-                    total_off = sum(len(v) for v in resolved_off.values())
-                    st.write(f"**{total_off} OFF request(s) found:**")
-                    for sid, dates in resolved_off.items():
-                        st.text(f"  {staff_by_id.get(sid, sid)} \u2014 {', '.join(dates)}")
+                ov_rows = [
+                    {"Staff Name": staff_by_id.get(sid, sid), "Date": dstr, "Status Code": code}
+                    for (sid, dstr), code in resolved_ov.items()
+                ]
+                if ov_rows:
+                    st.write(f"*{len(ov_rows)} manual override(s):*")
+                    edited_ov = st.data_editor(
+                        pd.DataFrame(ov_rows),
+                        num_rows="dynamic",
+                        use_container_width=True,
+                        key="ai_ov_editor",
+                    )
+                else:
+                    edited_ov = pd.DataFrame(columns=["Staff Name", "Date", "Status Code"])
+
+                off_rows = [
+                    {"Staff Name": staff_by_id.get(sid, sid), "OFF Date": dstr}
+                    for sid, dates in resolved_off.items()
+                    for dstr in dates
+                ]
+                if off_rows:
+                    st.write(f"*{len(off_rows)} OFF request(s):*")
+                    edited_off = st.data_editor(
+                        pd.DataFrame(off_rows),
+                        num_rows="dynamic",
+                        use_container_width=True,
+                        key="ai_off_editor",
+                    )
+                else:
+                    edited_off = pd.DataFrame(columns=["Staff Name", "OFF Date"])
 
                 if st.button("Apply to form", type="primary", key="btn_apply_extract"):
-                    ai_overrides = resolved_ov
-                    ai_off_requests = resolved_off
+                    name_to_id = {s.name.lower(): s.id for s in staff_list}
+                    new_ov = {}
+                    for _, row in edited_ov.iterrows():
+                        name = str(row.get("Staff Name", "")).strip()
+                        dstr = str(row.get("Date", "")).strip()
+                        code = str(row.get("Status Code", "")).strip().upper()
+                        sid = name_to_id.get(name.lower())
+                        if sid and dstr and code in MANUAL_STATUS_CODES:
+                            new_ov[(sid, dstr)] = code
+
+                    new_off: dict[str, list[str]] = {}
+                    for _, row in edited_off.iterrows():
+                        name = str(row.get("Staff Name", "")).strip()
+                        dstr = str(row.get("OFF Date", "")).strip()
+                        sid = name_to_id.get(name.lower())
+                        if sid and dstr:
+                            new_off.setdefault(sid, []).append(dstr)
+
+                    ai_overrides = new_ov
+                    ai_off_requests = new_off
                     st.session_state["ai_extract_overrides"] = {}
                     st.session_state["ai_extract_off_requests"] = {}
                     st.session_state["ai_extract_warnings"] = []

@@ -69,6 +69,22 @@ def render_preview(
 
         st.dataframe(df.style.applymap(color_cell), use_container_width=True)
 
+    # AI summary for managers
+    import os
+    if os.environ.get("OPENROUTER_API_KEY"):
+        with st.expander("AI summary for managers", expanded=False):
+            if st.button("Generate summary", key="btn_ai_summary"):
+                with st.spinner("Generating summary… this may take a few seconds."):
+                    try:
+                        from src.rag.schedule_summary import generate_schedule_summary
+                        from src.rag.llm_client import friendly_error_message
+                        summary = generate_schedule_summary(
+                            staff_list, sections, config, assignments,
+                        )
+                    except Exception as e:
+                        summary = friendly_error_message(e)
+                st.markdown(summary)
+
     # Download button
     st.divider()
     excel_bytes = export_schedule(staff_list, sections, config, assignments)

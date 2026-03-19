@@ -4,13 +4,12 @@ Uses LangChain structured output to parse manager instructions into
 typed override and OFF-request dicts matching ScheduleConfig format.
 """
 
-import os
 from datetime import date
 from pydantic import BaseModel, Field
-from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 
 from src.models.staff import Staff
+from src.rag.llm_client import get_llm
 
 
 class OverrideEntry(BaseModel):
@@ -54,16 +53,8 @@ _EXTRACT_PROMPT = ChatPromptTemplate.from_messages([
 ])
 
 
-def _get_llm() -> ChatOpenAI:
-    api_key = os.environ.get("OPENROUTER_API_KEY", "")
-    model = os.environ.get("OPENROUTER_MODEL", "openai/gpt-4o-mini")
-    return ChatOpenAI(
-        model=model,
-        openai_api_key=api_key,
-        openai_api_base="https://openrouter.ai/api/v1",
-        temperature=0,
-        max_tokens=1024,
-    )
+def _get_llm():
+    return get_llm(temperature=0, max_tokens=1024)
 
 
 def extract_overrides_from_text(

@@ -117,7 +117,12 @@ Manual statuses override AI assignment for that cell — the optimizer never tou
 
 ```
 [Upload Roster] → [Setup Wizard] → [Per-Schedule Form]
-       → [Constraint Optimizer] → [Preview + Warnings] → [Download .xlsx]
+       → [Constraint Optimizer] → [Preview + Warnings + AI Summary] → [Download .xlsx]
+
+Parallel AI paths (require OPENROUTER_API_KEY):
+  • Policy Help — RAG Q&A over scheduling-rules.md (with source citations)
+  • Schedule Check — paste a grid, LLM flags rule violations
+  • Free-text extraction — natural-language overrides/OFF requests → editable tables
 ```
 
 ---
@@ -129,7 +134,6 @@ AI Shift Scheduler/
 ├── src/
 │   ├── models/             # Typed data models (Staff, ShiftSlot, ScheduleConfig)
 │   │   ├── staff.py
-│   │   ├── section.py
 │   │   ├── shift.py
 │   │   └── schedule.py
 │   ├── solver/             # OR-Tools constraint optimizer
@@ -138,21 +142,34 @@ AI Shift Scheduler/
 │   │   └── roster_parser.py
 │   ├── exporter/           # Excel output generation
 │   │   └── excel_exporter.py
+│   ├── rag/                # LangChain / RAG AI features
+│   │   ├── __init__.py
+│   │   ├── llm_client.py       # Shared OpenRouter client, error handling, JSONL logging
+│   │   ├── policy_qa.py        # RAG Q&A over scheduling-rules.md (with source citations)
+│   │   ├── extract_overrides.py # Free-text → structured overrides/OFF requests
+│   │   ├── roster_sanity.py    # Paste-a-schedule rule-violation checker
+│   │   └── schedule_summary.py # Natural-language schedule summary for managers
 │   └── ui/                 # Streamlit pages
 │       ├── setup_wizard.py
-│       ├── schedule_form.py
-│       └── preview.py
+│       ├── schedule_form.py    # Includes AI free-text extraction with inline editing
+│       ├── preview.py          # Schedule grid + AI summary expander
+│       ├── policy_help.py      # Policy Q&A chat with source citations + example questions
+│       └── schedule_check.py   # Schedule sanity checker page
 ├── tests/
 │   ├── test_optimizer.py
 │   ├── test_parser.py
-│   └── test_exporter.py
+│   ├── test_exporter.py
+│   ├── test_extract_overrides.py  # validate_extracted + mocked chain
+│   ├── test_policy_qa.py          # vectorstore build, retrieval quality, mocked LLM
+│   └── test_schedule_summary.py   # pure build_summary_stats tests
 ├── docs/
-│   └── context.md          ← this file
+│   ├── context.md          ← this file
+│   └── scheduling-rules.md # Policy rules (single source of truth for RAG)
 ├── config/
 │   └── defaults.py
-├── examples/
-│   └── sample_roster.xlsx
-├── app.py                  # Streamlit entry point
+├── logs/                   # JSONL Q&A logs (gitignored)
+│   └── .gitkeep
+├── app.py                  # Streamlit entry point (5 sidebar pages)
 └── requirements.txt
 ```
 
@@ -167,6 +184,15 @@ AI Shift Scheduler/
 | Excel I/O | openpyxl | Read/write .xlsx matching existing format |
 | Data models | Python dataclasses | Typed, lightweight |
 | Testing | pytest | Standard |
+| AI / RAG | LangChain + FAISS + FastEmbed | Policy Q&A, extraction, sanity checking, summaries |
+| LLM gateway | OpenRouter (ChatOpenAI) | Flexible model routing (default: gpt-4o-mini) |
+
+### Environment variables
+
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `OPENROUTER_API_KEY` | For AI features | — | Enables Policy Help, extraction, sanity check, summary |
+| `OPENROUTER_MODEL` | No | `openai/gpt-4o-mini` | Override the LLM model used via OpenRouter |
 
 ---
 
@@ -226,13 +252,16 @@ class ScheduleConfig:
 
 ## Test Status
 
-**11/11 tests passing** as of 2026-03-09.
+**39/39 tests passing** as of 2026-03-19.
 
 | Test File | Tests | Status |
 |---|---|---|
 | `tests/test_optimizer.py` | 5 | ✅ All passing |
 | `tests/test_parser.py` | 4 | ✅ All passing (against real roster file) |
 | `tests/test_exporter.py` | 2 | ✅ All passing |
+| `tests/test_extract_overrides.py` | 15 | ✅ All passing (validate_extracted + mocked chain) |
+| `tests/test_policy_qa.py` | 8 | ✅ All passing (vectorstore, retrieval quality, mocked LLM) |
+| `tests/test_schedule_summary.py` | 5 | ✅ All passing (pure build_summary_stats) |
 
 Run tests: `python -m pytest tests/ -v` from project root.
 
@@ -259,4 +288,31 @@ cd "C:/Users/rishi/AI Shift Scheduler"
 streamlit run app.py --server.headless true
 ```
 
-*Last updated: 2026-03-10 — E2E verification complete*
+---
+
+## AI Features (added 2026-03-19)
+
+All AI features are optional — they activate only when `OPENROUTER_API_KEY` is set. The app is fully functional without it.
+
+### Policy Q&A (page 4)
+- RAG pipeline over `docs/scheduling-rules.md` using FAISS + FastEmbed (local embeddings) + OpenRouter LLM.
+- Chunks carry `heading` metadata parsed from `##`/`###` sections; answers display a "Sources used" expander citing the rule sections that fed the response.
+- "How to ask" collapsible with 6 example questions aligned to actual rule topics.
+- Q&A interactions logged to `logs/policy_qa.jsonl` (timestamp, question, answer, sources).
+
+### Free-text Override Extraction (page 3)
+- Manager pastes natural-language instructions (e.g. "PH on 21st for everyone. Sarah OFF 14th.").
+- LLM returns Pydantic-typed `ExtractedOverrides`; `validate_extracted` maps names to IDs, checks dates/codes, and surfaces warnings.
+- Results shown in **editable `st.data_editor` tables** so the manager can correct before applying.
+
+### Schedule Sanity Check (page 5)
+- Paste an exported schedule grid (text/CSV); LLM compares it against retrieved scheduling rules and flags likely violations with rule-topic citations.
+
+### AI Schedule Summary (page 3 preview)
+- After generating a schedule, an "AI summary for managers" expander builds compact stats (OFF distribution, shift counts, coverage) and passes them to the LLM for a 4-8 sentence natural-language summary.
+
+### Shared Infrastructure
+- `src/rag/llm_client.py`: centralized `get_llm()` with 30s timeout, `classify_llm_error()` mapping HTTP errors to friendly user messages, `log_qa_interaction()` for JSONL logging.
+- All UI surfaces use `friendly_error_message()` instead of raw exception strings.
+
+*Last updated: 2026-03-19 — Phases 1-3 (AI robustness, UX, expanded LangChain) complete*
